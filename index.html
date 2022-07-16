@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ja">
+    <head>
+        <meta charset="utf-8" />
+        <title>videochat</title>
+        <script src="/socket.io/socket.io.js"></script>
+    </head>
+    <body>
+        <button type="button" id="start">start</button>
+        <button type="button" id="stop" style="display: none;" disabled>stop</button>
+
+    </body>
+    <main>
+        <video id="local"  autoplay muted playsinline></video>
+        <video id="remote"  autoplay muted playsinline></video>
+    </main>
+    <script>
+        socket=io();
+        var remotevideoflag=false;
+        var peer;
+        const localvideo=document.getElementById('local');
+        const remotevideo=document.getElementById('remote');
+        const startbutton=document.getElementById('start');
+        const stopbutton=document.getElementById('stop');
+        //var iceq=[];
+        socket.on('connect',() =>{
+            console.log('connection');
+        });
+        socket.on('message',async(event) =>{
+            let message=JSON.parse(event);
+            if(!peer){
+                    return console.log('peer is not exist',message);
+            }
+            if(message.sdp){
+                await peer.setRemoteDescription(new RTCSessionDescription(message.sdp));
+                switch(message.sdp.type){
+                    case 'offer': {
+                        const answer = await peer.createAnswer();
+                        await peer.setLocalDescription(answer);
+                        socket.emit('message', JSON.stringify({ sdp: peer.localDescription }));
+                    }
+                    case 'answer': {
+                        console.log('message: answer');
+                    }
+                }
+            }
+            else if (message.candidate){
+                const candidate = new RTCIceCandidate(message.candidate);
+                peer.addIceCandidate(candidate);
+            }
+        });
+        
+        function peerconnection(stream){
+            if(peer){
+                return;
+            }
+            const config={iceServers:[ {urls:'stun:stun.l.google.com:19302'}]};
+            peer=new RTCPeerConnection(config);
+            peer.onicecandidate= event => {
+                if (event.candidate) {
+                    socket.emit('message', JSON.stringify({ candidate: event.candidate}));
+                }
+            }
+            stream.getTracks().forEach(track => peer.addTrack(track, stream));
+            
+            peer.ontrack= event => {
+                remotevideoflag=true;
+                playvideo(remotevideo,event.streams[0]);
+
+            }
+            
+        }
+        async function playvideo(video,stream) {
+            video.srcObject=stream;
+            await video.play();
+        }
+        async function startvideo() {
+            const myvideostream=await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: false
+            });
+            try {
+                localvideo.srcObject=myvideostream;
+            } catch (error) {
+                localvideo.src=URL.createObjectURL(myvideostream);
+            }
+            await localvideo.play();
+            return myvideostream;
+        }
+        startbutton.addEventListener('click',async ()=>{
+            const myvideostream= await startvideo();
+            peerconnection(myvideostream);
+            const session=await peer.createOffer();
+            await peer.setLocalDescription(session);
+            socket.emit('message', JSON.stringify({sdp: peer.localDescription}));
+            startbutton.disabled=true;
+            stopbutton.disabled=false;
+            startbutton.style.display='none';
+            stopbutton.style.display='inline';
+        });
+        stopbutton.addEventListener('click',() =>{
+            peer.close();
+            peer=null;
+            remotevideo.pause();
+            remotevideo.srcObject=null;
+            remotevideoflag=false;
+            localvideo.pause();
+            startbutton.disabled=false;
+            stopbutton.disabled=true;
+            startbutton.style.display='inline';
+            stopbutton.style.display='none';
+        });
+    </script>
+</html>
